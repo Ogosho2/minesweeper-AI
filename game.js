@@ -8,6 +8,8 @@ let state = null, cells = [], worker = null, aiReady = false, aiFailure = '';
 let aiResult = null, requestId = 0, analyzing = false, queued = false, aiStepWanted = false;
 let lastReplay = null, replay = null, autoTimer = null, timeInterval = null, saveTimer = null;
 let isModalOpen = false;
+// Store the last cell DOM state so unchanged cells never incur layout/paint work.
+let cellCache = [];
 
 function index(r,c){return r*state.cols+c;}
 function inside(r,c){return r>=0 && c>=0 && r<state.rows && c<state.cols;}
@@ -77,7 +79,8 @@ function buildBoard(){
   const px=state.cols>=50?23:state.cols>=30?28:state.cols>=16?34:38;
   const root=$('board');root.style.setProperty('--cell',px+'px');
   root.style.gridTemplateColumns=`repeat(${state.cols}, var(--cell))`;
-  root.replaceChildren();cells=[];
+  root.replaceChildren();cells=[];cellCache=[];
+  root.classList.remove('ai-stale');
   const frag=document.createDocumentFragment();
   for(let r=0;r<state.rows;r++)for(let c=0;c<state.cols;c++){
     const el=document.createElement('button');
@@ -105,42 +108,74 @@ function aiMaps(result){
   return {safe,mines,prob,approx};
 }
 function percent(p){const n=p*100;return n>0&&n<1?'<1':n>99&&n<100?'>99':Math.round(n).toString();}
-function render(){
+function setText(id, value){
+  const node=$(id);
+  if(node.textContent!==value)node.textContent=value;
+}
+// Render only cells whose visible content differs from their previous state.
+// In particular, clicking a cell never needs to rebuild overlays elsewhere.
+function render(dirty=null){
   if(!state)return;
-  $('flags-left').textContent=state.flagsLeft;
-  $('misses-left').textContent=state.misses;
-  $('elapsed').textContent=formatTime(sec());
-  $('reset').textContent=state.outcome==='clear'?'🏆 Clear!':state.outcome==='over'?'💥 Game Over':'↻ Reset';
+  setText('flags-left',String(state.flagsLeft));
+  setText('misses-left',String(state.misses));
+  setText('elapsed',formatTime(sec()));
+  setText('reset',state.outcome==='clear'?'🏆 Clear!':state.outcome==='over'?'💥 Game Over':'↻ Reset');
   const showAi=$('ai-show').checked && !state.gameOver;
   const ai=showAi && aiResult?aiMaps(aiResult):null;
   const best=aiResult?.move && showAi ? index(aiResult.move.r,aiResult.move.c): -1;
-  for(let i=0;i<cells.length;i++){
-    const el=cells[i];const revealed=!!state.revealed[i], flagged=!!state.flags[i];
-    const cls=['cell'];let content='';
-    if(revealed){cls.push('opened');if(state.mine[i]){content='💣';if(state.outcome!=='clear'&&!state.gameOver)cls.push('hit');}
-      else if(state.adj[i]){content=String(state.adj[i]);el.dataset.number=String(state.adj[i]);}
-    }else {delete el.dataset.number;if(flagged)content='🚩';}
-    if(state.gameOver&&!revealed&&flagged&&!state.mine[i]){content='✖';cls.push('wrong');}
-    el.className=cls.join(' ');
-    el.textContent=content;
+  const showNumbers=$('ai-probs').checked;
+  const paintCell=i=>{
+    const revealed=!!state.revealed[i], flagged=!!state.flags[i];
+    const mine=!!state.mine[i];
+    const n=revealed&&!mine?state.adj[i]:0;
+    const hit=revealed&&mine&&state.outcome!== 'clear'&&!state.gameOver;
+    const wrong=state.gameOver&&!revealed&&flagged&&!mine;
+    const cls='cell'+(revealed?' opened':'')+(hit?' hit':'')+(wrong?' wrong':'');
+    const content=revealed?(mine?'💣':(n?String(n):'')):(wrong?'✖':flagged?'🚩':'');
+    let mark='', overlay='', overlayText='', overlayColor='';
     if(ai&&!revealed){
-      if(flagged){if(ai.safe.has(i)){const mark=document.createElement('span');mark.className='wrong-flag';el.appendChild(mark);}}
-      else if(ai.prob.has(i)){
-        const layer=document.createElement('span');layer.className='overlay';
-        if(ai.safe.has(i)){layer.classList.add('safe');layer.textContent='✔';}
-        else if(ai.mines.has(i)){layer.classList.add('mine');layer.textContent='✖';}
-        else {layer.classList.add('prob');layer.style.backgroundColor=heat(ai.prob.get(i));
-          if($('ai-probs').checked)layer.textContent=(ai.approx.has(i)?'~':'')+percent(ai.prob.get(i));}
-        el.appendChild(layer);
+      if(flagged && ai.safe.has(i))mark='wrong-flag';
+      else if(!flagged && ai.prob.has(i)){
+        if(ai.safe.has(i)){overlay='safe';overlayText='✔';}
+        else if(ai.mines.has(i)){overlay='mine';overlayText='✖';}
+        else {
+          overlay='prob';
+          const p=ai.prob.get(i);
+          overlayColor=heat(p);
+          if(showNumbers)overlayText=(ai.approx.has(i)?'~':'')+percent(p);
+        }
       }
     }
-    if(i===best){const mark=document.createElement('span');mark.className='best';el.appendChild(mark);}
-  }
+    const isBest=i===best;
+    const signature=[cls,content,n,overlay,overlayText,overlayColor,mark,isBest].join('|');
+    if(cellCache[i]===signature)return;
+    cellCache[i]=signature;
+    const el=cells[i];
+    if(el.className!==cls)el.className=cls;
+    // Replacing children is only needed when this particular cell changed.
+    el.textContent=content;
+    if(n)el.dataset.number=String(n);
+    else delete el.dataset.number;
+    if(overlay){
+      const layer=document.createElement('span');
+      layer.className='overlay '+overlay;
+      if(overlayColor)layer.style.backgroundColor=overlayColor;
+      layer.textContent=overlayText;
+      el.appendChild(layer);
+    }
+    if(mark){const layer=document.createElement('span');layer.className=mark;el.appendChild(layer);}
+    if(isBest){const layer=document.createElement('span');layer.className='best';el.appendChild(layer);}
+  };
+  if(dirty===null){for(let i=0;i<cells.length;i++)paintCell(i);}
+  else for(const i of dirty)paintCell(i);
 }
-function invalidate(){
+// Immediately hide now-outdated hints with one CSS change and repaint only
+// the opened/flagged cells. The next Worker result updates AI overlays later.
+function invalidate(dirty=null){
   state.version++;
   aiResult=null;
-  render();
+  $('board').classList.add('ai-stale');
+  render(dirty);
   if(!state.gameOver)requestAnalysis();
 }
 function placeMines(r,c){
@@ -178,7 +213,7 @@ function onCell(r,c){
   if(state.revealed[i]){chord(r,c);return;}
   if(state.flags[i])return;
   const changed=new Set(),hits=new Set();reveal(r,c,changed,hits);
-  finalize(`開く (${r+1}, ${c+1})`,[r,c],hits);
+  finalize(`開く (${r+1}, ${c+1})`,[r,c],hits,changed);
 }
 function toggleFlag(r,c){
   if(isModalOpen||replay||state.gameOver||!state.placed)return;
@@ -187,7 +222,7 @@ function toggleFlag(r,c){
   if(state.flags[i]){state.flags[i]=0;state.flagsLeft++;}
   else {if(state.flagsLeft<=0)return;state.flags[i]=1;state.flagsLeft--;}
   record(`旗を${state.flags[i]?'立てる':'外す'} (${r+1}, ${c+1})`,[r,c]);
-  invalidate();
+  invalidate(new Set([i]));
 }
 function chord(r,c){
   if(!state.placed||state.gameOver)return;
@@ -197,32 +232,33 @@ function chord(r,c){
   if(around.reduce((a,[rr,cc])=>a+state.flags[index(rr,cc)],0)!==n)return;
   const changed=new Set(),hits=new Set();
   for(const [rr,cc] of around){const j=index(rr,cc);if(!state.revealed[j]&&!state.flags[j])reveal(rr,cc,changed,hits);}
-  if(changed.size)finalize(`周囲を開く (${r+1}, ${c+1})`,[r,c],hits);
+  if(changed.size)finalize(`周囲を開く (${r+1}, ${c+1})`,[r,c],hits,changed);
 }
 function endGame(outcome){
   state.gameOver=true;state.outcome=outcome;state.endedAt=performance.now();stopAuto();
   if(outcome==='over')for(let i=0;i<state.mine.length;i++)if(state.mine[i])state.revealed[i]=1;
 }
-function finalize(action,cell,hits){
+function finalize(action,cell,hits,changed){
   if(hits.size){
     state.misses--;
-    render();
+    $('board').classList.add('ai-stale');
+    render(changed);
     const count=state.misses;
     showDialog('💣 地雷を踏みました',`残り猶予: ${count} 回`,[
       ...(count>0?[{text:'続ける',primary:true,run:()=>{
         for(const i of hits)if(state.mine[i]&&!state.flags[i]){state.flags[i]=1;state.flagsLeft--;}
-        record(action,cell);invalidate();
+        record(action,cell);invalidate(hits);
       }}]:[]),
       {text:'終わる',run:()=>{endGame('over');record(action,cell);invalidate();}}
     ]);
     stopAuto();return;
   }
   if(state.safeOpened===state.rows*state.cols-state.totalMines){
-    endGame('clear');record(action,cell);render();
+    endGame('clear');record(action,cell);$('board').classList.add('ai-stale');render(changed);
     showDialog('🏆 CLEAR!',`クリア時間：${formatTime(sec())} ／ ${state.rows}×${state.cols} ／ 地雷${state.totalMines}個`,[
       {text:'閉じる',run:()=>{}},{text:'もう一度',primary:true,run:()=>reset(state.rows,state.cols,state.totalMines,state.level)}
     ]);
-  }else{record(action,cell);invalidate();}
+  }else{record(action,cell);invalidate(changed);}
 }
 function showDialog(title,text,buttons,fields){
   isModalOpen=true;
@@ -327,6 +363,7 @@ function handleAiMessage(event){
     }
     if(state.gameOver||replay)return;
     displayAnalysis(data.result);render();
+    if($('ai-show').checked)$('board').classList.remove('ai-stale');
     if(aiStepWanted){aiStepWanted=false;performAiMove();}
     else if($('ai-auto').checked)autoTimer=setTimeout(runAuto,120);
   }
@@ -417,8 +454,17 @@ function bind(){
     if(!e.target.checked){clearTimeout(autoTimer);autoTimer=null;return;}
     if(!state.gameOver)runAuto();
   });
-  $('ai-show').addEventListener('change',()=>{render();if($('ai-show').checked)requestAnalysis();else message('AI表示はオフです');});
-  $('ai-probs').addEventListener('change',render);
+  $('ai-show').addEventListener('change',()=>{
+    if(!$('ai-show').checked){
+      $('board').classList.add('ai-stale');
+      message('AI表示はオフです');
+    }else if(aiResult && !analyzing){
+      render();$('board').classList.remove('ai-stale');
+    }else{
+      $('board').classList.add('ai-stale');requestAnalysis();
+    }
+  });
+  $('ai-probs').addEventListener('change',()=>{if($('ai-show').checked)render();});
   $('replay-open').addEventListener('click',openReplay);
   $('replay-close').addEventListener('click',closeReplay);
   $('replay-first').addEventListener('click',()=>{stopReplayTimer();showReplay(0);});
