@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Minesweeper — AI搭載</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="game.js" defer></script>
+</head>
+<body>
+ <main class="app" id="app">
+  <header class="top">
+   <div class="heading"><span class="logo">✦</span><div><h1>MINESWEEPER</h1><div class="subtitle">AI ANALYSIS EDITION</div></div></div>
+   <div class="status-pill" id="engine-status">AIを準備中…</div>
+  </header>
+  <section class="toolbar" aria-label="ゲーム設定">
+   <label class="control difficulty">難易度 <select id="difficulty">
+    <option value="beginner">Beginner · 9×9 / 10</option>
+    <option value="intermediate">Intermediate · 16×16 / 40</option>
+    <option value="expert">Expert · 16×30 / 99</option>
+    <option value="huge">Huge · 30×30 / 199</option>
+    <option value="custom">Custom...</option>
+   </select></label>
+   <div class="stats"><span title="残りの旗">🚩 <strong id="flags-left">10</strong></span><span title="残りのミス猶予">💥 <strong id="misses-left">3</strong></span><span title="経過時間">⏱ <strong id="elapsed">0.0s</strong></span></div>
+   <button class="primary" id="reset" type="button">↻ Reset</button>
+  </section>
+  <section class="toolbar ai-toolbar" aria-label="AI操作">
+   <button id="ai-step" type="button" disabled>AI 1手</button>
+   <label class="toggle"><input type="checkbox" id="ai-auto" disabled> 自動プレイ</label>
+   <label class="toggle"><input type="checkbox" id="ai-show" checked> AI表示</label>
+   <label class="toggle"><input type="checkbox" id="ai-probs" checked> 確率%</label>
+   <button type="button" id="replay-open">リプレイ</button>
+  </section>
+  <div class="ai-details"><p id="ai-info" aria-live="polite">PythonのAIエンジンを起動しています…</p><p id="ai-hover"></p></div>
+  <div class="board-outer" id="board-outer"><div class="board" id="board" role="grid" aria-label="マインスイーパーの盤面"></div></div>
+  <div class="hint">左クリック：開く · 右クリック：旗 · 数字のマスをクリック：周囲を開く · スマートフォンは旗モードを使用</div>
+  <label class="toggle mobile-flag"><input type="checkbox" id="flag-mode"> 旗モード（クリックで旗を切り替える）</label>
+  <div class="footer">AIの分析はブラウザ内で実行され、盤面はサーバーに送信されません。</div>
+ </main>
+ <div class="modal-backdrop hidden" id="dialog" role="presentation">
+  <section class="modal" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
+   <h2 id="dialog-title"></h2><p id="dialog-message"></p><div id="dialog-fields"></div><div id="dialog-buttons" class="dialog-buttons"></div>
+  </section>
+ </div>
+ <div class="modal-backdrop hidden" id="replay-dialog" role="presentation">
+  <section class="modal replay-modal" role="dialog" aria-modal="true" aria-labelledby="replay-title">
+   <div class="replay-title"><h2 id="replay-title">リプレイ（閲覧専用）</h2><button id="replay-close" type="button">閉じる</button></div>
+   <div class="replay-controls">
+    <button type="button" id="replay-first">≪</button><button type="button" id="replay-prev">〈</button>
+    <button type="button" id="replay-play">▶</button><button type="button" id="replay-next">〉</button><button type="button" id="replay-last">≫</button>
+   </div>
+   <input id="replay-slider" aria-label="リプレイの手数" type="range" min="0" max="0" value="0" step="1">
+   <p class="replay-status" id="replay-status"></p>
+   <div class="board-outer replay-outer"><div id="replay-board" class="board"></div></div>
+   <p class="hint">このリプレイはブラウザに保存されています。別の端末には引き継がれません。</p>
+  </section>
+ </div>
+</body>
+</html>
